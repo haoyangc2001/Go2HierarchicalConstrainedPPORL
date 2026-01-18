@@ -61,7 +61,7 @@ def main() -> None:
         command = torch.zeros(env.num_envs, 3, device=device)
         command[:, 0] = vx_cmd
         command[:, 2] = yaw_cmd
-        obs, rewards, dones, infos = env.step(command)
+        obs, rewards, costs, dones, infos = env.step(command)
         target_distance = infos.get(
             "target_distance_est", torch.zeros(env.num_envs, device=device)
         )

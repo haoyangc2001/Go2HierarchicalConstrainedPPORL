@@ -18,8 +18,8 @@ class HierarchicalVecEnv:
         return self.env.reset()
 
     def step(self, actions: torch.Tensor):
-        obs, rewards, dones, infos = self.env.step(actions)
-        return obs, rewards, dones, infos
+        obs, rewards, costs, dones, infos = self.env.step(actions)
+        return obs, rewards, costs, dones, infos
 
     def close(self) -> None:
         self.env.close()

@@ -1,59 +1,48 @@
-# Go2 Hierarchical Reward-Shaping RL
+# Go2 分层 CPPO 导航
 
-## Project Overview
-This repository implements a hierarchical reinforcement learning system for Unitree Go2 navigation. The low-level locomotion controller is fixed and pre-trained, while the high-level navigation policy is trained with reward-shaping PPO to reach a target while avoiding obstacles and boundaries.
+## 项目概述
+本仓库实现了 Unitree Go2 分层强化学习导航。低层为固定的预训练运动控制器，高层采用 CMDP + CPPO（PPO-Lagrangian）进行训练，使机器人到达目标点并尽量避免与障碍物/边界碰撞。
 
-## Key Focus
-- High-level navigation trained with dense reward shaping.
-- Low-level locomotion policy kept fixed for stable gait execution.
-- Safety-aware termination via collision and boundary checks.
+## 关键路径
+- 环境：`legged_gym_go2/legged_gym/envs/go2/`
+- 训练脚本：`legged_gym_go2/legged_gym/scripts/`
+- 强化学习算法：`rsl_rl/rsl_rl/algorithms/`
+- 部署：`legged_gym_go2/deploy/`
+- 日志/模型：`/home/caohy/repositories/MCRA_RL/logs/`
 
-## Architecture
-- **Low-level (locomotion)**: velocity commands -> joint actions  
-  `legged_gym_go2/legged_gym/envs/go2/go2_env.py`
-- **High-level (navigation)**: observations -> velocity commands  
-  `legged_gym_go2/legged_gym/envs/go2/high_level_navigation_env.py`
-- **Hierarchical wrapper**: bridges high/low levels and handles action repeat  
-  `legged_gym_go2/legged_gym/envs/go2/hierarchical_go2_env.py`
+## 分层结构
+- 低层（运动控制）：`legged_gym_go2/legged_gym/envs/go2/go2_env.py`
+- 高层（导航封装）：`legged_gym_go2/legged_gym/envs/go2/high_level_navigation_env.py`
+- 分层封装：`legged_gym_go2/legged_gym/envs/go2/hierarchical_go2_env.py`
 
-## Reward-Shaping PPO (High-Level)
-The high-level policy is optimized with standard PPO using a dense, goal-directed reward:
-- Target-direction projection of executed velocity commands
-- Angle error penalty to align commanded direction with target
-- Obstacle proximity penalty based on nearest hazard distance
-- Goal progress reward (distance reduction)
-- Terminal rewards for success/collision/timeout
+## CPPO 训练要点
+- 目标：最大化奖励且满足回合总成本约束（CMDP）。
+- 高层奖励：以目标进展为主，带动作平滑惩罚与到达奖励。
+- 高层成本：近障稠密成本 + 碰撞硬成本（支持加权）。
+- 算法：`rsl_rl/rsl_rl/algorithms/cppo.py`
+- 方案细节见：`CPPO方案指导.md`
 
-Full algorithm details and formulas are in: `RewardShapingPPODesign.md`
-
-## Training
-Before running any script, activate the environment:
+## 训练
+先激活环境：
 ```bash
 conda activate unitree-rl
 ```
 
-Train the high-level policy:
+启动 CPPO 训练：
 ```bash
-python legged_gym_go2/legged_gym/scripts/train_reward_shaping.py --headless=true --num_envs=32
+python legged_gym_go2/legged_gym/scripts/train_cppo.py --headless=true --num_envs=32
 ```
 
-## Evaluation
-No dedicated evaluation script is included. You can load saved checkpoints from
-`logs/logs/<experiment_name>/<timestamp>/` and integrate them into your own
-rollout or deployment workflow.
+## 配置入口
+- 高层奖励/成本参数：`legged_gym_go2/legged_gym/envs/go2/go2_config.py`（`GO2HighLevelCfg.reward_shaping`）
+- CPPO 超参数：`legged_gym_go2/legged_gym/envs/go2/go2_config.py`（`GO2HighLevelCfgPPO`）
 
-## Configuration Entry Points
-- Reward shaping parameters:  
-  `legged_gym_go2/legged_gym/envs/go2/go2_config.py` (`GO2HighLevelCfg.reward_shaping`)
-- PPO hyperparameters:  
-  `legged_gym_go2/legged_gym/envs/go2/go2_config.py` (`GO2HighLevelCfgPPO`)
-
-## Logs
-Training logs and checkpoints are stored under:
+## 日志与模型
+训练日志与模型保存到：
 ```
-logs/logs/<experiment_name>/<timestamp>/
+/home/caohy/repositories/MCRA_RL/logs/<experiment_name>/<timestamp>/
 ```
 
-## Notes
-- High-level velocity limits are enforced in `update_velocity_commands` and are part of the project constraints.
-- Large `.pt` checkpoints and logs are ignored by default via `.gitignore`.
+## 说明
+- 低层策略固定，不参与训练。
+- 高层动作会映射为速度命令并按 `high_level_action_repeat` 重复执行。

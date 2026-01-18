@@ -2,3 +2,4 @@
 #  SPDX-License-Identifier: BSD-3-Clause
 
 from .rollout_storage import RolloutStorage
+from .constrained_rollout_storage import ConstrainedRolloutStorage

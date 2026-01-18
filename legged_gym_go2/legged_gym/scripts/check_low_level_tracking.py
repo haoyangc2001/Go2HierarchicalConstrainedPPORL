@@ -8,8 +8,7 @@ import torch
 
 from legged_gym.envs import *  # noqa: F401,F403
 from legged_gym.utils import task_registry
-from legged_gym.utils.helpers import class_to_dict
-from rsl_rl.runners import OnPolicyRunner
+from rsl_rl.modules import ActorCritic, ActorCriticRecurrent
 from legged_gym.envs.go2.go2_config import GO2HighLevelCfgPPO
 
 
@@ -42,11 +41,45 @@ def _parse_args():
 
 
 def _load_low_level_policy(env, train_cfg, checkpoint_path, device):
-    train_cfg.runner.resume = False
-    train_cfg_dict = class_to_dict(train_cfg)
-    runner = OnPolicyRunner(env, train_cfg_dict, device=device)
-    runner.load(checkpoint_path, load_optimizer=False)
-    return runner.get_inference_policy(device=env.device)
+    policy_class_name = getattr(train_cfg.runner, "policy_class_name", "ActorCritic")
+    if policy_class_name == "ActorCriticRecurrent":
+        policy_class = ActorCriticRecurrent
+    else:
+        policy_class = ActorCritic
+    num_critic_obs = env.num_privileged_obs or env.num_obs
+    policy_kwargs = {
+        "actor_hidden_dims": list(getattr(train_cfg.policy, "actor_hidden_dims", [256, 256, 256])),
+        "critic_hidden_dims": list(getattr(train_cfg.policy, "critic_hidden_dims", [256, 256, 256])),
+        "activation": getattr(train_cfg.policy, "activation", "elu"),
+        "init_noise_std": getattr(train_cfg.policy, "init_noise_std", 1.0),
+    }
+    if policy_class is ActorCriticRecurrent:
+        policy_kwargs.update(
+            rnn_type=getattr(train_cfg.policy, "rnn_type", "lstm"),
+            rnn_hidden_size=getattr(train_cfg.policy, "rnn_hidden_size", 512),
+            rnn_num_layers=getattr(train_cfg.policy, "rnn_num_layers", 1),
+        )
+
+    actor_critic = policy_class(
+        num_actor_obs=env.num_obs,
+        num_critic_obs=num_critic_obs,
+        num_actions=env.num_actions,
+        **policy_kwargs,
+    ).to(env.device)
+
+    checkpoint = torch.load(checkpoint_path, map_location=device)
+    if isinstance(checkpoint, dict):
+        state_dict = (
+            checkpoint.get("model_state_dict")
+            or checkpoint.get("actor_critic")
+            or checkpoint.get("policy_state_dict")
+            or checkpoint
+        )
+    else:
+        state_dict = checkpoint
+    actor_critic.load_state_dict(state_dict)
+    actor_critic.eval()
+    return actor_critic.act_inference
 
 
 def _parse_cmd(cmd_str):

@@ -197,27 +197,21 @@ class GO2HighLevelCfg(GO2RoughCfg):
     target_lidar_max_range = 8.0
 
     class reward_shaping:
-        # Reward shaping parameters for high-level navigation.
+        # Reward design for CPPO high-level navigation.
         goal_reached_dist = 0.3
         collision_dist = 0.35
-        obstacle_avoid_dist = 1.2
-        progress_scale = 45.0
-        alignment_scale = 2.0
-        obstacle_penalty_scale = 0.6
-        yaw_rate_scale = 0.02
-        action_smooth_scale = 0.08
-        body_speed_scale = 1.0
-        command_alignment_scale = 0.6
-        idle_speed_threshold = 0.1
-        idle_distance_threshold = 0.5
-        idle_penalty_scale = 0.6
+        progress_scale = 10.0
+        action_smooth_scale = 0.05
         success_reward = 100.0
-        collision_penalty = 50.0
-        timeout_penalty = 10.0
         reward_scale = 1.0
         reward_clip = 200.0
         terminate_on_safety_violation = True
         terminate_on_success = True
+
+        # Cost design (CMDP constraint).
+        cost_safe_dist = 1.2
+        cost_collision_weight = 5.0
+        cost_near_weight = 1.0
 
     class env(GO2RoughCfg.env):
         num_observations = 7  # placeholder; overwritten below
@@ -237,6 +231,7 @@ class GO2HighLevelCfgPPO(LeggedRobotCfgPPO):
         clip_param = 0.2
         value_clip_param = 0.2
         value_loss_coef = 0.5
+        cost_value_loss_coef = 0.5
         schedule = 'adaptive'
         desired_kl = 0.03
         min_lr = 5e-6
@@ -245,6 +240,11 @@ class GO2HighLevelCfgPPO(LeggedRobotCfgPPO):
         num_mini_batches = 4
         num_steps_per_env = 200 # increase horizon to give more time to reach the goal
         max_grad_norm = 1.0
+        cost_limit = 150.0
+        lambda_init = 0.0
+        lambda_lr = 0.05
+        lambda_max = 100.0
+        normalize_advantage = True
 
     class runner(LeggedRobotCfgPPO.runner):
         run_name = ''

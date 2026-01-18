@@ -1,9 +1,8 @@
-import torch
 import os
+import torch
 from legged_gym.envs.go2.high_level_navigation_env import HighLevelNavigationEnv, HighLevelNavigationConfig
 from legged_gym.utils import task_registry
-from legged_gym.utils.helpers import class_to_dict
-from rsl_rl.runners import OnPolicyRunner
+from rsl_rl.modules import ActorCritic, ActorCriticRecurrent
 
 
 class HierarchicalGO2Env:
@@ -95,17 +94,48 @@ class HierarchicalGO2Env:
         """Load the pretrained low-level policy."""
         if not os.path.exists(self.low_level_model_path):
             raise FileNotFoundError(f"Low-level policy checkpoint not found: {self.low_level_model_path}")
-
-        # Create a PPO runner to restore the low-level policy
         train_cfg = self._get_low_level_train_cfg()
-        train_cfg_dict = class_to_dict(train_cfg)
-        ppo_runner = OnPolicyRunner(self.base_env, train_cfg_dict, device=self.device)
+        policy_class_name = getattr(train_cfg.runner, "policy_class_name", "ActorCritic")
+        if policy_class_name == "ActorCriticRecurrent":
+            policy_class = ActorCriticRecurrent
+        else:
+            policy_class = ActorCritic
+        num_critic_obs = self.base_env.num_privileged_obs or self.base_env.num_obs
+        policy_kwargs = {
+            "actor_hidden_dims": list(getattr(train_cfg.policy, "actor_hidden_dims", [256, 256, 256])),
+            "critic_hidden_dims": list(getattr(train_cfg.policy, "critic_hidden_dims", [256, 256, 256])),
+            "activation": getattr(train_cfg.policy, "activation", "elu"),
+            "init_noise_std": getattr(train_cfg.policy, "init_noise_std", 1.0),
+        }
+        if policy_class is ActorCriticRecurrent:
+            policy_kwargs.update(
+                rnn_type=getattr(train_cfg.policy, "rnn_type", "lstm"),
+                rnn_hidden_size=getattr(train_cfg.policy, "rnn_hidden_size", 512),
+                rnn_num_layers=getattr(train_cfg.policy, "rnn_num_layers", 1),
+            )
 
-        # Load weights and return an inference callable
+        actor_critic = policy_class(
+            num_actor_obs=self.base_env.num_obs,
+            num_critic_obs=num_critic_obs,
+            num_actions=self.base_env.num_actions,
+            **policy_kwargs,
+        ).to(self.device)
+
         print(f"Loading low-level policy checkpoint: {self.low_level_model_path}")
-        ppo_runner.load(self.low_level_model_path)
+        checkpoint = torch.load(self.low_level_model_path, map_location=self.device)
+        if isinstance(checkpoint, dict):
+            state_dict = (
+                checkpoint.get("model_state_dict")
+                or checkpoint.get("actor_critic")
+                or checkpoint.get("policy_state_dict")
+                or checkpoint
+            )
+        else:
+            state_dict = checkpoint
+        actor_critic.load_state_dict(state_dict)
+        actor_critic.eval()
 
-        return ppo_runner.get_inference_policy(device=self.device)
+        return actor_critic.act_inference
 
     def _get_low_level_train_cfg(self):
         """Retrieve the configuration used to train the low-level policy."""
@@ -165,6 +195,7 @@ class HierarchicalGO2Env:
         Returns:
             observations: [num_envs, num_obs] high-level observations
             rewards: [num_envs] reward values
+            costs: [num_envs] cost values
             dones: [num_envs] termination flags
             infos: Additional diagnostic information
         """
@@ -182,6 +213,14 @@ class HierarchicalGO2Env:
         obstacle_surface_buf = None
         base_lin_vel_buf = None
         time_outs_buf = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        cost_near_sum = torch.zeros(self.num_envs, device=self.device)
+        cost_collision_sum = torch.zeros(self.num_envs, device=self.device)
+        if self.reward_cfg is not None:
+            cost_safe_dist = max(float(getattr(self.reward_cfg, "cost_safe_dist", 1.0)), 1e-6)
+            collision_dist = float(getattr(self.reward_cfg, "collision_dist", 0.35))
+        else:
+            cost_safe_dist = 1.0
+            collision_dist = 0.35
         for _ in range(self.low_level_action_repeat):
             self.base_env.commands[:, :3] = desired_velocity_commands
             self.base_env.compute_observations()
@@ -197,6 +236,16 @@ class HierarchicalGO2Env:
             step_time_outs = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
             if isinstance(base_infos, dict) and "time_outs" in base_infos:
                 step_time_outs = base_infos["time_outs"].to(self.device).bool()
+
+            active_mask = ~done_mask
+            if active_mask.any():
+                hazard_distance_step = self.base_env.min_hazard_distance
+                cost_near_step = torch.clamp(
+                    (cost_safe_dist - hazard_distance_step) / cost_safe_dist, min=0.0
+                )
+                cost_collision_step = (hazard_distance_step <= collision_dist).float()
+                cost_near_sum += cost_near_step * active_mask.float()
+                cost_collision_sum += cost_collision_step * active_mask.float()
 
             reach_metric = self.base_env.reach_metric
             if reach_buf is None:
@@ -243,11 +292,13 @@ class HierarchicalGO2Env:
         hazard_distance_for_reward = min_hazard_true if min_hazard_true is not None else hazard_distance_est
 
         reset_mask = self.base_env.episode_length_buf == 0
-        reward, done_flags, reached, success, collision, terminated, truncated, components = self._compute_reward(
+        reward, cost, done_flags, reached, success, collision, terminated, truncated, components = self._compute_reward(
             high_level_obs=high_level_obs,
             desired_commands=desired_velocity_commands,
             target_distance=reach_metric,
             hazard_distance=hazard_distance_for_reward,
+            cost_near=cost_near_sum,
+            cost_collision=cost_collision_sum,
             base_dones=aggregated_dones,
             time_outs=time_outs_buf,
             reset_mask=reset_mask,
@@ -265,6 +316,9 @@ class HierarchicalGO2Env:
             "collision": collision,
             "terminated": terminated,
             "truncated": truncated,
+            "cost": cost,
+            "cost_near": components["cost_near"],
+            "cost_collision": components["cost_collision"],
             "target_distance": reach_metric,
             "target_distance_est": target_distance_est,
             "reach_metric": reach_metric,
@@ -276,16 +330,13 @@ class HierarchicalGO2Env:
             "base_lin_vel": base_lin_vel_buf,
             "desired_commands": desired_velocity_commands,
             "progress": components["progress"],
-            "alignment": components["alignment"],
-            "command_alignment": components["command_alignment"],
-            "obstacle_penalty": components["obstacle_penalty"],
             "command_speed": components["command_speed"],
             "body_speed": components["body_speed"],
             "command_delta": components["command_delta"],
             "reward_clip_frac": components["reward_clip_frac"],
         }
 
-        return high_level_obs, reward, done_flags, infos
+        return high_level_obs, reward, cost, done_flags, infos
 
     def _compute_reward(
         self,
@@ -293,6 +344,8 @@ class HierarchicalGO2Env:
         desired_commands: torch.Tensor,
         target_distance: torch.Tensor,
         hazard_distance: torch.Tensor,
+        cost_near: torch.Tensor,
+        cost_collision: torch.Tensor,
         base_dones: torch.Tensor,
         time_outs: torch.Tensor,
         reset_mask: torch.Tensor,
@@ -304,31 +357,14 @@ class HierarchicalGO2Env:
             self.prev_commands = desired_commands.detach().clone()
         goal_reached_dist = float(getattr(cfg, "goal_reached_dist", 0.3))
         collision_dist = float(getattr(cfg, "collision_dist", 0.35))
-        obstacle_avoid_dist = float(getattr(cfg, "obstacle_avoid_dist", 1.0))
         progress_scale = float(getattr(cfg, "progress_scale", 10.0))
-        alignment_scale = float(getattr(cfg, "alignment_scale", 1.0))
-        obstacle_penalty_scale = float(getattr(cfg, "obstacle_penalty_scale", 1.0))
-        yaw_rate_scale = float(getattr(cfg, "yaw_rate_scale", 0.0))
         action_smooth_scale = float(getattr(cfg, "action_smooth_scale", 0.0))
-        body_speed_scale = float(getattr(cfg, "body_speed_scale", 0.0))
-        command_alignment_scale = float(getattr(cfg, "command_alignment_scale", 0.0))
-        idle_speed = float(getattr(cfg, "idle_speed_threshold", 0.05))
-        idle_dist = float(getattr(cfg, "idle_distance_threshold", 0.5))
-        idle_penalty_scale = float(getattr(cfg, "idle_penalty_scale", 0.0))
         success_reward = float(getattr(cfg, "success_reward", 100.0))
-        collision_penalty = float(getattr(cfg, "collision_penalty", 100.0))
-        timeout_penalty = float(getattr(cfg, "timeout_penalty", 0.0))
+        cost_collision_weight = float(getattr(cfg, "cost_collision_weight", 1.0))
+        cost_near_weight = float(getattr(cfg, "cost_near_weight", 1.0))
 
         body_vel_xy = self.high_level_env.extract_body_vel_xy(high_level_obs)
         body_speed = torch.norm(body_vel_xy, dim=1)
-        target_dir = high_level_obs[:, 6:8]
-        alignment = torch.sum(body_vel_xy * target_dir, dim=1)
-        command_alignment = torch.sum(desired_commands[:, :2] * target_dir, dim=1)
-        yaw_rate = high_level_obs[:, 4] / self.high_level_env.ang_vel_scale
-
-        hazard_penalty = torch.clamp(
-            (obstacle_avoid_dist - hazard_distance) / obstacle_avoid_dist, min=0.0
-        )
         command_speed = torch.norm(desired_commands[:, :2], dim=1)
 
         effective_prev_dist = torch.where(reset_mask, target_distance, self.prev_target_distance)
@@ -345,37 +381,18 @@ class HierarchicalGO2Env:
 
         terminated = done_flags & ~time_outs
         truncated = time_outs & ~terminated
-        failure = terminated & ~reached
-        collision = (hazard_collision | failure) & done_flags
+        collision = hazard_collision & done_flags
 
-        active_mask = (~done_flags).float()
-        progress = progress * (~(terminated | truncated)).float()
-        alignment = alignment * active_mask
-        command_alignment = command_alignment * active_mask
-        hazard_penalty = hazard_penalty * active_mask
+        active_mask = (~(terminated | truncated)).float()
+        progress = progress * active_mask
+        command_delta = command_delta * active_mask
         body_speed = body_speed * active_mask
         command_speed = command_speed * active_mask
-        yaw_penalty = torch.abs(yaw_rate) * active_mask
-        command_delta = command_delta * active_mask
 
-        reward = (
-            progress_scale * progress
-            + alignment_scale * alignment
-            + command_alignment_scale * command_alignment
-            - obstacle_penalty_scale * hazard_penalty
-            - yaw_rate_scale * yaw_penalty
-            - action_smooth_scale * command_delta
-        )
-        if body_speed_scale > 0.0:
-            reward = reward + body_speed_scale * body_speed
-        if idle_penalty_scale > 0.0:
-            idle_mask = (body_speed < idle_speed) & (target_distance > idle_dist)
-            reward = reward - idle_penalty_scale * idle_mask.float()
+        reward = progress_scale * progress - action_smooth_scale * command_delta
 
         success = reached & done_flags & ~collision
         reward = torch.where(success, reward + success_reward, reward)
-        reward = torch.where(collision, reward - collision_penalty, reward)
-        reward = torch.where(truncated, reward - timeout_penalty, reward)
 
         reward_scale = float(getattr(cfg, "reward_scale", 1.0))
         reward = reward * reward_scale
@@ -387,18 +404,19 @@ class HierarchicalGO2Env:
         else:
             reward_clip_frac = torch.zeros_like(reward)
 
+        cost = cost_collision_weight * cost_collision + cost_near_weight * cost_near
+
         components = {
             "progress": progress,
-            "alignment": alignment,
-            "command_alignment": command_alignment,
-            "obstacle_penalty": hazard_penalty,
             "command_speed": command_speed,
             "body_speed": body_speed,
             "command_delta": command_delta,
             "reward_clip_frac": reward_clip_frac,
+            "cost_near": cost_near,
+            "cost_collision": cost_collision,
         }
 
-        return reward, done_flags, reached, success, collision, terminated, truncated, components
+        return reward, cost, done_flags, reached, success, collision, terminated, truncated, components
 
     def get_observations(self):
         """Return the current high-level observation buffer."""

@@ -14,5 +14,6 @@ Thumbs.db
 # Logs and checkpoints
 /logs/high_level_go2_reward_shaping/
 /logs/logs/high_level_go2_reward_shaping/
+/logs/high_level_go2_CPPO/
 
 .vscode/launch.json

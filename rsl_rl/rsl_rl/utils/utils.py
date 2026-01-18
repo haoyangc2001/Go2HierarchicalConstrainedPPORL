@@ -29,6 +29,7 @@
 # Copyright (c) 2021 ETH Zurich, Nikita Rudin
 
 import torch
+import importlib
 
 def split_and_pad_trajectories(tensor, dones):
     """ Splits trajectories at done indices. Then concatenates them and padds with zeros up to the length og the longest trajectory.
@@ -69,3 +70,21 @@ def unpad_trajectories(trajectories, masks):
     """
     # Need to transpose before and after the masking to have proper reshaping
     return trajectories.transpose(1, 0)[masks.transpose(1, 0)].view(-1, trajectories.shape[0], trajectories.shape[-1]).transpose(1, 0)
+
+
+def resolve_callable(obj):
+    """Resolve a callable from a callable object or a 'module:function' string."""
+    if callable(obj):
+        return obj
+    if not isinstance(obj, str):
+        return None
+    module_name = obj
+    attr_name = None
+    if ":" in obj:
+        module_name, attr_name = obj.split(":", 1)
+    elif "." in obj:
+        module_name, attr_name = obj.rsplit(".", 1)
+    if attr_name is None:
+        return None
+    module = importlib.import_module(module_name)
+    return getattr(module, attr_name, None)

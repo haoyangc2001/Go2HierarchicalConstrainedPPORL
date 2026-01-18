@@ -31,7 +31,7 @@ def train_reward_shaping(args) -> None:
 
     env_cfg, train_cfg = update_cfg_from_args(env_cfg, train_cfg, args)
     if train_cfg.runner.experiment_name == "high_level_go2":
-        train_cfg.runner.experiment_name = "high_level_go2_cppo"
+        train_cfg.runner.experiment_name = "high_level_go2_CPPO"
 
     device = torch.device(args.rl_device)
     env = create_env(env_cfg, train_cfg, args, device)
@@ -116,8 +116,8 @@ def train_reward_shaping(args) -> None:
 
     if log_dir is None:
         log_timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        base_log_root = "/home/caohy/repositories/MCRA_RL/logs"
-        log_dir = os.path.join(base_log_root, train_cfg.runner.experiment_name, log_timestamp)
+        base_log_root = "/home/caohy/repositories/MCRA_RL/logs/high_level_go2_CPPO"
+        log_dir = os.path.join(base_log_root, log_timestamp)
         os.makedirs(log_dir, exist_ok=True)
         print(f"created new log directory: {log_dir}")
     else:
