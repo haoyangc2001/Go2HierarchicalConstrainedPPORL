@@ -165,6 +165,10 @@ def train_reward_shaping(args) -> None:
         cost_collision_sum = 0.0
         episode_cost_sum = 0.0
         episode_cost_count = 0.0
+        episode_cost_success_sum = 0.0
+        episode_cost_success_count = 0.0
+        episode_cost_collision_sum = 0.0
+        episode_cost_collision_count = 0.0
         goal_dist_sum = 0.0
         min_hazard_sum = 0.0
         hazard_p10_sum = 0.0
@@ -224,9 +228,10 @@ def train_reward_shaping(args) -> None:
 
             if done_flags.any():
                 success_mask = done_flags & episode_reached & ~episode_collision
+                collision_mask = done_flags & hazard_collision
                 success_count += success_mask.sum().item()
                 reached_count += (done_flags & reached).sum().item()
-                collision_count += (done_flags & hazard_collision).sum().item()
+                collision_count += collision_mask.sum().item()
                 timeout_count += (done_flags & time_outs).sum().item()
                 episode_count += done_flags.sum().item()
                 ep_lengths = episode_steps[done_flags].float()
@@ -235,6 +240,12 @@ def train_reward_shaping(args) -> None:
                 episode_len_count += done_flags.sum().item()
                 episode_cost_sum += episode_cost_buf[done_flags].sum().item()
                 episode_cost_count += done_flags.sum().item()
+                if success_mask.any():
+                    episode_cost_success_sum += episode_cost_buf[success_mask].sum().item()
+                    episode_cost_success_count += success_mask.sum().item()
+                if collision_mask.any():
+                    episode_cost_collision_sum += episode_cost_buf[collision_mask].sum().item()
+                    episode_cost_collision_count += collision_mask.sum().item()
                 if success_mask.any():
                     success_steps_sum += episode_steps[success_mask].float().sum().item()
                 episode_collision[done_flags] = False
@@ -308,6 +319,16 @@ def train_reward_shaping(args) -> None:
         avg_cost_near = cost_near_sum / float(horizon)
         avg_cost_collision = cost_collision_sum / float(horizon)
         avg_episode_cost = episode_cost_sum / episode_cost_count if episode_cost_count > 0 else 0.0
+        avg_episode_cost_success = (
+            episode_cost_success_sum / episode_cost_success_count
+            if episode_cost_success_count > 0
+            else 0.0
+        )
+        avg_episode_cost_collision = (
+            episode_cost_collision_sum / episode_cost_collision_count
+            if episode_cost_collision_count > 0
+            else 0.0
+        )
         avg_goal_dist = goal_dist_sum / float(horizon)
         avg_min_hazard = min_hazard_sum / float(horizon)
         avg_progress = progress_sum / float(horizon)
@@ -349,12 +370,17 @@ def train_reward_shaping(args) -> None:
             cost_value_loss = float(update_stats.get("cost_value_loss", 0.0))
             lagrange_multiplier = float(update_stats.get("lagrange_multiplier", 0.0))
             episode_cost_mean = float(update_stats.get("episode_cost", avg_episode_cost))
+            nonfinite_loss_batches = int(update_stats.get("nonfinite_loss_batches", 0))
+            nonfinite_grad_batches = int(update_stats.get("nonfinite_grad_batches", 0))
+            performed_updates = int(update_stats.get("performed_updates", 0))
             cost_limit = float(getattr(train_cfg.algorithm, "cost_limit", 0.0))
             log_line = (
                 f"iter {iteration + 1:05d} | success {success_rate:.3f} | reach {reach_rate:.3f} | "
                 f"collision {collision_rate:.3f} | boundary_collision_rate {boundary_collision_rate:.3f} | "
                 f"obstacle_collision_rate {obstacle_collision_rate:.3f} | timeout {timeout_rate:.3f} | "
-                f"cost {episode_cost_mean:.3f} | cost_limit {cost_limit:.3f} | lambda {lagrange_multiplier:.3f} | "
+                f"cost {episode_cost_mean:.3f} | cost_success {avg_episode_cost_success:.3f} | "
+                f"cost_collision_ep {avg_episode_cost_collision:.3f} | cost_limit {cost_limit:.3f} | "
+                f"lambda {lagrange_multiplier:.3f} | "
                 f"cost_step {avg_cost:.3f} | cost_near {avg_cost_near:.3f} | cost_collision {avg_cost_collision:.3f} | "
                 f"success_steps {execution_cost:.1f} | avg_reward {avg_reward:.3f} | "
                 f"progress {avg_progress:.6f} | "
@@ -364,7 +390,9 @@ def train_reward_shaping(args) -> None:
                 f"policy_loss {policy_loss:.5f} | value_loss {value_loss:.5f} | cost_value_loss {cost_value_loss:.5f} | "
                 f"approx_kl {approx_kl:.5f} | clip_frac {clip_fraction:.3f} | "
                 f"entropy {entropy:.5f} | lr {lr:.6f} | grad_norm {grad_norm:.3f} | "
-                f"value_clip_frac {value_clip_frac:.3f} | reward_clip {avg_reward_clip:.3f} | "
+                f"nan_loss {nonfinite_loss_batches:d} | nan_grad {nonfinite_grad_batches:d} | "
+                f"updates {performed_updates:d} | value_clip_frac {value_clip_frac:.3f} | "
+                f"reward_clip {avg_reward_clip:.3f} | "
                 f"hazard_p10 {avg_hazard_p10:.3f} | hazard_p50 {avg_hazard_p50:.3f} | hazard_p90 {avg_hazard_p90:.3f} | "
                 f"boundary_violation {avg_boundary_violation:.3f} | "
                 f"ep_len_mean {avg_episode_len:.1f} | init_goal_dist {start_goal_dist:.3f} | "

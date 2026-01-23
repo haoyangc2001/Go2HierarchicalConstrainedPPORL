@@ -319,6 +319,7 @@ class HierarchicalGO2Env:
             "cost": cost,
             "cost_near": components["cost_near"],
             "cost_collision": components["cost_collision"],
+            "cost_collision_terminal": components["cost_collision_terminal"],
             "target_distance": reach_metric,
             "target_distance_est": target_distance_est,
             "reach_metric": reach_metric,
@@ -361,7 +362,9 @@ class HierarchicalGO2Env:
         action_smooth_scale = float(getattr(cfg, "action_smooth_scale", 0.0))
         success_reward = float(getattr(cfg, "success_reward", 100.0))
         cost_collision_weight = float(getattr(cfg, "cost_collision_weight", 1.0))
+        cost_collision_terminal = float(getattr(cfg, "cost_collision_terminal", 0.0))
         cost_near_weight = float(getattr(cfg, "cost_near_weight", 1.0))
+        collision_penalty = float(getattr(cfg, "collision_penalty", 0.0))
 
         body_vel_xy = self.high_level_env.extract_body_vel_xy(high_level_obs)
         body_speed = torch.norm(body_vel_xy, dim=1)
@@ -393,6 +396,8 @@ class HierarchicalGO2Env:
 
         success = reached & done_flags & ~collision
         reward = torch.where(success, reward + success_reward, reward)
+        if collision_penalty > 0.0:
+            reward = reward - collision_penalty * collision.float()
 
         reward_scale = float(getattr(cfg, "reward_scale", 1.0))
         reward = reward * reward_scale
@@ -404,7 +409,15 @@ class HierarchicalGO2Env:
         else:
             reward_clip_frac = torch.zeros_like(reward)
 
-        cost = cost_collision_weight * cost_collision + cost_near_weight * cost_near
+        if cost_collision_terminal > 0.0:
+            collision_terminal_cost = cost_collision_terminal * collision.float()
+        else:
+            collision_terminal_cost = torch.zeros_like(cost_near)
+        cost = (
+            cost_collision_weight * cost_collision
+            + cost_near_weight * cost_near
+            + collision_terminal_cost
+        )
 
         components = {
             "progress": progress,
@@ -414,6 +427,7 @@ class HierarchicalGO2Env:
             "reward_clip_frac": reward_clip_frac,
             "cost_near": cost_near,
             "cost_collision": cost_collision,
+            "cost_collision_terminal": collision_terminal_cost,
         }
 
         return reward, cost, done_flags, reached, success, collision, terminated, truncated, components

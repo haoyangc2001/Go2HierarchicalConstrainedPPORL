@@ -189,7 +189,7 @@ class GO2HighLevelCfg(GO2RoughCfg):
 
     seed = 1  # keep interfaces stable by using a fixed seed
     reach_metric_scale = 0.2
-    action_scale = [1.3, 1.0, 1.0]
+    action_scale = [1.0, 1.0, 1.2]
     enable_manual_lidar = True
     lidar_max_range = 8.0
     lidar_num_bins = 16
@@ -200,8 +200,8 @@ class GO2HighLevelCfg(GO2RoughCfg):
         # Reward design for CPPO high-level navigation.
         goal_reached_dist = 0.3
         collision_dist = 0.35
-        progress_scale = 10.0
-        action_smooth_scale = 0.05
+        progress_scale = 12.0
+        action_smooth_scale = 0.03
         success_reward = 100.0
         reward_scale = 1.0
         reward_clip = 200.0
@@ -210,13 +210,15 @@ class GO2HighLevelCfg(GO2RoughCfg):
 
         # Cost design (CMDP constraint).
         cost_safe_dist = 1.2
-        cost_collision_weight = 5.0
-        cost_near_weight = 1.0
+        cost_collision_weight = 20.0
+        cost_collision_terminal = 75.0
+        cost_near_weight = 0.3
+        collision_penalty = 180.0
 
     class env(GO2RoughCfg.env):
         num_observations = 7  # placeholder; overwritten below
         num_actions = 3       # [vx, vy, vyaw]
-        high_level_action_repeat = 10  # number of low-level steps per high-level action
+        high_level_action_repeat = 5  # number of low-level steps per high-level action
         episode_length_s = 40
 
 class GO2HighLevelCfgPPO(LeggedRobotCfgPPO):
@@ -227,22 +229,22 @@ class GO2HighLevelCfgPPO(LeggedRobotCfgPPO):
 
     class algorithm(LeggedRobotCfgPPO.algorithm):
         entropy_coef = 0.003
-        learning_rate = 3e-4
-        clip_param = 0.2
-        value_clip_param = 0.2
+        learning_rate = 2e-4
+        clip_param = 0.15
+        value_clip_param = 0.15
         value_loss_coef = 0.5
         cost_value_loss_coef = 0.5
         schedule = 'adaptive'
-        desired_kl = 0.03
+        desired_kl = 0.04
         min_lr = 5e-6
-        max_lr = 5e-4
+        max_lr = 3e-4
         num_learning_epochs = 3
-        num_mini_batches = 4
+        num_mini_batches = 12
         num_steps_per_env = 200 # increase horizon to give more time to reach the goal
-        max_grad_norm = 1.0
-        cost_limit = 150.0
+        max_grad_norm = 0.5
+        cost_limit = 90.0
         lambda_init = 0.0
-        lambda_lr = 0.05
+        lambda_lr = 0.02
         lambda_max = 100.0
         normalize_advantage = True
 
@@ -253,7 +255,7 @@ class GO2HighLevelCfgPPO(LeggedRobotCfgPPO):
         save_interval = 200
         # gh_dump_interval = 50  # iteration interval for dumping g/h tensors
         resume = False
-        resume_path = "/home/caohy/repositories/MCRA_RL/legged_gym_go2/legged_gym/scripts/logs/high_level_go2/20260105-102613/model_1300.pt"  # 你的checkpoint路径
+        resume_path = "/home/caohy/repositories/MCRA_RL/logs/high_level_go2_CPPO/20260120-171158/model_200.pt"  # 你的checkpoint路径
         # 底层策略模型路径
         low_level_model_path = "/home/caohy/repositories/MCRA_RL/logs/rough_go2/Sep08_11-57-26_/model_18500.pt"
 

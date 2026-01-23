@@ -171,6 +171,9 @@ class CPPO:
         mean_clip_frac = 0.0
         mean_value_clip_frac = 0.0
         mean_grad_norm = 0.0
+        performed_updates = 0
+        nonfinite_loss_batches = 0
+        nonfinite_grad_batches = 0
 
         if self.normalize_advantage:
             advantages = self.storage.advantages
@@ -280,8 +283,15 @@ class CPPO:
 
             # Gradient step
             self.optimizer.zero_grad()
+            if not torch.isfinite(loss):
+                nonfinite_loss_batches += 1
+                continue
             loss.backward()
             grad_norm = nn.utils.clip_grad_norm_(self.actor_critic.parameters(), self.max_grad_norm)
+            if not torch.isfinite(grad_norm):
+                self.optimizer.zero_grad()
+                nonfinite_grad_batches += 1
+                continue
             self.optimizer.step()
 
             mean_value_loss += value_loss.item()
@@ -292,17 +302,17 @@ class CPPO:
             mean_clip_frac += ((ratio - 1.0).abs() > self.clip_param).float().mean().item()
             mean_value_clip_frac += value_clip_frac.item()
             mean_grad_norm += float(grad_norm)
+            performed_updates += 1
 
-        num_updates = self.num_learning_epochs * self.num_mini_batches
-        if num_updates > 0:
-            mean_value_loss /= num_updates
-            mean_cost_value_loss /= num_updates
-            mean_surrogate_loss /= num_updates
-            mean_entropy /= num_updates
-            mean_kl /= num_updates
-            mean_clip_frac /= num_updates
-            mean_value_clip_frac /= num_updates
-            mean_grad_norm /= num_updates
+        if performed_updates > 0:
+            mean_value_loss /= performed_updates
+            mean_cost_value_loss /= performed_updates
+            mean_surrogate_loss /= performed_updates
+            mean_entropy /= performed_updates
+            mean_kl /= performed_updates
+            mean_clip_frac /= performed_updates
+            mean_value_clip_frac /= performed_updates
+            mean_grad_norm /= performed_updates
 
         episode_cost, _ = self._update_lagrange_multiplier()
 
@@ -314,6 +324,9 @@ class CPPO:
             "cost_value_loss": mean_cost_value_loss,
             "lagrange_multiplier": self.lagrange_multiplier,
             "episode_cost": episode_cost,
+            "nonfinite_loss_batches": nonfinite_loss_batches,
+            "nonfinite_grad_batches": nonfinite_grad_batches,
+            "performed_updates": performed_updates,
         }
 
         self.storage.clear()

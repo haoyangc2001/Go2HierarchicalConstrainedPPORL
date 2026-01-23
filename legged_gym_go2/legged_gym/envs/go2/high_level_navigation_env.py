@@ -199,6 +199,11 @@ class HighLevelNavigationEnv:
             lidar_start = target_start + (self.target_lidar_num_bins if self.target_lidar_num_bins > 0 else 0)
             self.high_level_obs_buf[:, lidar_start:lidar_start + self.lidar_num_bins] = lidar_buf
 
+        # Guard against NaN/Inf from upstream physics or geometry edge cases.
+        self.high_level_obs_buf = torch.nan_to_num(
+            self.high_level_obs_buf, nan=0.0, posinf=0.0, neginf=0.0
+        )
+
 
     def get_observations(self):
         """返回当前高层观测"""

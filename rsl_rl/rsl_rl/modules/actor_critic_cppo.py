@@ -97,7 +97,9 @@ class ActorCriticCPPO(nn.Module):
         return self.distribution.entropy().sum(dim=-1)
 
     def update_distribution(self, observations):
+        observations = torch.nan_to_num(observations, nan=0.0, posinf=0.0, neginf=0.0)
         mean = self.actor(observations)
+        mean = torch.nan_to_num(mean, nan=0.0, posinf=0.0, neginf=0.0)
         self.distribution = Normal(mean, mean * 0.0 + self.std)
 
     def act(self, observations, **kwargs):
@@ -123,9 +125,15 @@ class ActorCriticCPPO(nn.Module):
         return actions_mean
 
     def evaluate(self, critic_observations, **kwargs):
+        critic_observations = torch.nan_to_num(
+            critic_observations, nan=0.0, posinf=0.0, neginf=0.0
+        )
         return self.critic(critic_observations)
 
     def evaluate_cost(self, critic_observations, **kwargs):
+        critic_observations = torch.nan_to_num(
+            critic_observations, nan=0.0, posinf=0.0, neginf=0.0
+        )
         return self.cost_critic(critic_observations)
 
 
