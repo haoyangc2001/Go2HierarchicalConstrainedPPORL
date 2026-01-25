@@ -1,7 +1,7 @@
 # Go2 分层 CPPO 导航
 
 ## 项目概述
-本仓库实现了 Unitree Go2 分层强化学习导航。低层为固定的预训练运动控制器，高层采用 CMDP + CPPO（PPO-Lagrangian）进行训练，使机器人到达目标点并尽量避免与障碍物/边界碰撞。
+本仓库实现了 Unitree Go2 分层强化学习导航。低层为固定的预训练运动控制器，高层采用 **CMDP + CPPO（PPO-Lagrangian，on-policy、model-free）** 进行训练，使机器人到达目标点并尽量避免与障碍物/边界碰撞。
 
 ## 关键路径
 - 环境：`legged_gym_go2/legged_gym/envs/go2/`
@@ -17,8 +17,9 @@
 
 ## CPPO 训练要点
 - 目标：最大化奖励且满足回合总成本约束（CMDP）。
-- 高层奖励：以目标进展为主，带动作平滑惩罚与到达奖励。
-- 高层成本：近障稠密成本 + 碰撞硬成本（支持加权）。
+- 奖励（高层宏步）：基于目标进展与指令平滑，并包含到达奖励、可选碰撞惩罚与奖励裁剪。
+- 成本（高层宏步）：近障稠密成本 + 碰撞硬成本 + 可选碰撞终止成本。
+- 终止与超时：done 由低层聚合，time-out 对 reward/cost 同时做 bootstrap。
 - 算法：`rsl_rl/rsl_rl/algorithms/cppo.py`
 - 方案细节见：`CPPO方案指导.md`
 

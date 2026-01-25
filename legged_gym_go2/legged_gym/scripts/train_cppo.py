@@ -163,6 +163,7 @@ def train_reward_shaping(args) -> None:
         cost_sum = 0.0
         cost_near_sum = 0.0
         cost_collision_sum = 0.0
+        cost_collision_terminal_sum = 0.0
         episode_cost_sum = 0.0
         episode_cost_count = 0.0
         episode_cost_success_sum = 0.0
@@ -211,6 +212,9 @@ def train_reward_shaping(args) -> None:
             progress = infos.get("progress", torch.zeros_like(rewards))
             cost_near = infos.get("cost_near", torch.zeros_like(rewards))
             cost_collision = infos.get("cost_collision", torch.zeros_like(rewards))
+            cost_collision_terminal = infos.get(
+                "cost_collision_terminal", torch.zeros_like(rewards)
+            )
             command_speed = infos.get("command_speed", torch.zeros_like(rewards))
             body_speed = infos.get("body_speed", torch.zeros_like(rewards))
             command_delta = infos.get("command_delta", torch.zeros_like(rewards))
@@ -257,6 +261,7 @@ def train_reward_shaping(args) -> None:
             cost_sum += costs.mean().item()
             cost_near_sum += cost_near.mean().item()
             cost_collision_sum += cost_collision.mean().item()
+            cost_collision_terminal_sum += cost_collision_terminal.mean().item()
             goal_dist_sum += target_distance.mean().item()
             min_hazard_sum += min_hazard_distance.mean().item()
             hazard_quantiles = torch.quantile(
@@ -318,6 +323,7 @@ def train_reward_shaping(args) -> None:
         avg_cost = cost_sum / float(horizon)
         avg_cost_near = cost_near_sum / float(horizon)
         avg_cost_collision = cost_collision_sum / float(horizon)
+        avg_cost_collision_terminal = cost_collision_terminal_sum / float(horizon)
         avg_episode_cost = episode_cost_sum / episode_cost_count if episode_cost_count > 0 else 0.0
         avg_episode_cost_success = (
             episode_cost_success_sum / episode_cost_success_count
@@ -382,6 +388,7 @@ def train_reward_shaping(args) -> None:
                 f"cost_collision_ep {avg_episode_cost_collision:.3f} | cost_limit {cost_limit:.3f} | "
                 f"lambda {lagrange_multiplier:.3f} | "
                 f"cost_step {avg_cost:.3f} | cost_near {avg_cost_near:.3f} | cost_collision {avg_cost_collision:.3f} | "
+                f"cost_collision_terminal {avg_cost_collision_terminal:.3f} | "
                 f"success_steps {execution_cost:.1f} | avg_reward {avg_reward:.3f} | "
                 f"progress {avg_progress:.6f} | "
                 f"goal_dist {avg_goal_dist:.3f} | min_hazard {avg_min_hazard:.3f} | "

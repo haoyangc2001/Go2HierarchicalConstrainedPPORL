@@ -217,3 +217,95 @@
 2) 若 `lambda` 仍饱和：继续上调 `cost_limit`（如 95–110）或适度下调 `cost_collision_terminal`（如 60–70）。
 3) 若碰撞仍高：继续降低前向上限（或增大 `vyaw` 比例），并检查 `cost_collision_terminal` 与 `collision_penalty` 的平衡是否过强抑制探索。
 4) 若 `approx_kl/clip_frac` 仍偏高：考虑将 `num_learning_epochs` 从 3 降到 2，或进一步增大 `num_mini_batches`。
+
+
+
+# 2026-01-23 训练日志分析与改动记录（20260123-133702）
+
+## 一、日志结论（是否收敛/异常）
+- 未稳定收敛：success 在中期达到峰值后回落，最佳 50-iter 均值≈0.396（iter 295–344），末尾 100 iter 均值≈0.299。
+- 碰撞仍占主导：末尾 100 iter collision≈0.701，timeout=0，回合多数以碰撞结束。
+- 约束仍偏紧、乘子高位：cost 末尾≈92.4 高于 cost_limit=90，lambda 末尾≈90 且在 iter≈120 后多次触顶（≈29% 迭代 lambda=100）。
+- 训练稳定性一般：approx_kl≈0.040、clip_frac≈0.306；grad_norm 末尾均值≈105，最大到 766，学习率早降到 min_lr（8e-6）。
+- 探索收缩：action_std≈0.20、entropy≈-0.63，策略趋于保守但碰撞率未下降。
+
+## 二、本次代码变更（缓解饱和 + 提升探索 + 直接避障梯度）
+1) 降低拉格朗日更新步长
+   - 文件：`legged_gym_go2/legged_gym/envs/go2/go2_config.py`
+   - 修改：`lambda_lr` 0.02 → 0.01
+
+2) 恢复小尺度近障奖励惩罚
+   - 文件：`legged_gym_go2/legged_gym/envs/go2/go2_config.py`
+   - 修改：新增 `reward_near_penalty_scale = 3.0`
+   - 文件：`legged_gym_go2/legged_gym/envs/go2/hierarchical_go2_env.py`
+   - 修改：`_compute_reward` 中加入 `- reward_near_penalty_scale * cost_near`
+
+3) 提升探索强度
+   - 文件：`legged_gym_go2/legged_gym/envs/go2/go2_config.py`
+   - 修改：`entropy_coef` 0.003 → 0.008
+
+## 三、下一步建议（按顺序）
+1) 重新训练 200–400 iter，重点观察 `lambda` 是否不再长期高位、`cost` 是否围绕 90 波动、`collision` 是否下降到 <0.6。
+2) 若 `lambda` 仍接近饱和：在保持 cost_limit=90 前提下，考虑继续下调 `cost_near_weight`（如 0.2）或降低 `lambda_lr` 到 0.005。
+3) 若碰撞仍高：降低前向上限或进一步降低 `high_level_action_repeat`（如 4），提升避障反应速度。
+
+
+
+# 2026-01-24 训练日志分析与改动记录（20260123-202452）
+
+## 一、日志结论（是否收敛/异常）
+- 成功率先上升后期崩塌：best 50-iter success 均值≈0.343（iter 358 结束），末尾 100 iter success 均值≈0.0615。
+- 碰撞主导终止：末尾 100 iter collision≈0.938，timeout=0；障碍碰撞占比高于边界（obstacle_collision_rate≈0.582 > boundary_collision_rate≈0.356）。
+- 约束长期饱和：cost≈133.3 显著高于 cost_limit=90，lambda=100 长期饱和（≈68.5% 迭代 λ≥99）。
+- 价值函数不稳定：value_clip_frac≈0.975、grad_norm≈7.9e3（峰值 2.17e4）；虽无 NaN（nan_loss/nan_grad=0），但 critic 失真严重。
+- 探索塌缩与行为收缩：action_std≈0.156、entropy≈-1.60、cmd_speed≈0.061，仍高碰撞；goal_dist 末期≈4.37、progress≈0.00469，进展停滞。
+
+## 二、本次代码变更（降低 reward 侧成本尺度）
+- 文件：`legged_gym_go2/legged_gym/envs/go2/go2_config.py`
+- 修改：
+  - `reward_near_penalty_scale: 3.0 -> 1.5`
+
+## 三、下一步建议（按顺序）
+1) 重新训练 200–400 iter，重点观察 `lambda` 是否不再长期饱和、`success` 是否回升并稳定、`collision` 是否下降到 <0.7。
+2) 若 `value_clip_frac` 仍接近 1 或 `grad_norm` 仍高：继续下调 `reward_near_penalty_scale`（如 1.0），或降低 `reward_scale` 以缩小 value 目标幅度。
+3) 若 `lambda` 仍长期=100：考虑引入 `cost_limit` 课程（先 110–120，再回落至 90），避免过早饱和。
+4) 若碰撞仍占主导：提高 `cost_collision_terminal` 或 `cost_collision_weight`，并观察 `cost_collision_ep` 是否显著下降。
+
+
+
+# 2026-01-24 训练日志分析与改动记录（20260124-105256）
+
+## 一、日志结论（是否收敛/异常）
+- 未收敛：success 中期上升但后期明显回落，峰值 iter 414 达 0.349，末尾 100 iter 均值≈0.111；最后 200 个滑动窗口均值仅≈0.084–0.114。
+- 碰撞主导终止：末尾 100 iter collision≈0.889，timeout=0；障碍碰撞占比高于边界（obstacle≈0.591 > boundary≈0.298）。
+- 约束长期饱和：末尾 cost≈125.4 显著高于 cost_limit=90，lambda 在 iter≥200 中约 95% 时间 ≥95，几乎常态顶满。
+- 更新稳定性偏弱：approx_kl≈0.036、clip_frac≈0.338；grad_norm 随训练升高（末尾均值≈1.16e3），学习率早降到 min_lr≈1.2e-5。
+- 探索/速度收缩但未改善安全：action_std≈0.20、entropy≈-1.27、cmd_speed≈0.083；goal_dist≈4.27、progress≈0.0054，进展停滞。
+
+## 二、原因分析
+- 约束过紧导致策略长期受限：episode cost 持续高于 cost_limit=90，拉格朗日乘子饱和后策略主要压成本，成功率无法稳定提升。
+- 成本结构对碰撞区分度不足：cost_collision 量级极小（≈0.001/step），cost_near 长期占主导，碰撞终止未形成强惩罚信号。
+- 更新与探索衰减：学习率较早降到最小、grad_norm 持续走高，熵与动作方差下降，策略趋于保守但仍高碰撞。
+
+## 三、本次代码变更（放宽约束 + 加强碰撞成本 + 稳定更新 + 日志补充）
+1) 放宽 cost 预算，避免拉格朗日乘子长期饱和
+   - 文件：`legged_gym_go2/legged_gym/envs/go2/go2_config.py`
+   - 修改：`cost_limit` 90.0 → 130.0
+
+2) 强化碰撞成本权重
+   - 文件：`legged_gym_go2/legged_gym/envs/go2/go2_config.py`
+   - 修改：`cost_collision_weight` 20.0 → 25.0
+
+3) 降低更新次数以稳定训练
+   - 文件：`legged_gym_go2/legged_gym/envs/go2/go2_config.py`
+   - 修改：`num_learning_epochs` 3 → 2
+
+4) 补充碰撞终止成本的均值日志
+   - 文件：`legged_gym_go2/legged_gym/scripts/train_cppo.py`
+   - 修改：新增 `cost_collision_terminal` 的 per-step 均值输出
+
+## 四、下一步建议（按顺序）
+1) 重新训练 200–400 iter，重点观察 `lambda` 是否脱离长期顶满、`cost` 是否围绕 130 波动、`success` 是否稳定回升。
+2) 结合新增日志确认 `cost_collision_terminal` 量级是否有效（不再接近 0）；若仍偏低且 collision 仍高，继续上调 `cost_collision_terminal`（如 100–120）或 `collision_penalty`。
+3) 若 `lambda` 仍接近饱和：适度下调 `cost_near_weight`（如 0.2）或再上调 `cost_limit`（如 140）。
+4) 若 `approx_kl/clip_frac` 仍偏高：增大 `num_mini_batches`（如 16）或固定较低 lr（如 1e-4）以减小单次更新步长。

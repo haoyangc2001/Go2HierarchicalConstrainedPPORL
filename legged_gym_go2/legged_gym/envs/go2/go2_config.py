@@ -203,6 +203,7 @@ class GO2HighLevelCfg(GO2RoughCfg):
         progress_scale = 12.0
         action_smooth_scale = 0.03
         success_reward = 100.0
+        reward_near_penalty_scale = 1.5
         reward_scale = 1.0
         reward_clip = 200.0
         terminate_on_safety_violation = True
@@ -210,7 +211,7 @@ class GO2HighLevelCfg(GO2RoughCfg):
 
         # Cost design (CMDP constraint).
         cost_safe_dist = 1.2
-        cost_collision_weight = 20.0
+        cost_collision_weight = 25.0
         cost_collision_terminal = 75.0
         cost_near_weight = 0.3
         collision_penalty = 180.0
@@ -228,7 +229,7 @@ class GO2HighLevelCfgPPO(LeggedRobotCfgPPO):
         init_noise_std = 0.3
 
     class algorithm(LeggedRobotCfgPPO.algorithm):
-        entropy_coef = 0.003
+        entropy_coef = 0.008
         learning_rate = 2e-4
         clip_param = 0.15
         value_clip_param = 0.15
@@ -238,13 +239,13 @@ class GO2HighLevelCfgPPO(LeggedRobotCfgPPO):
         desired_kl = 0.04
         min_lr = 5e-6
         max_lr = 3e-4
-        num_learning_epochs = 3
+        num_learning_epochs = 2
         num_mini_batches = 12
         num_steps_per_env = 200 # increase horizon to give more time to reach the goal
         max_grad_norm = 0.5
-        cost_limit = 90.0
+        cost_limit = 130.0
         lambda_init = 0.0
-        lambda_lr = 0.02
+        lambda_lr = 0.01
         lambda_max = 100.0
         normalize_advantage = True
 

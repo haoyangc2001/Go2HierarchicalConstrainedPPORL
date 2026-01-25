@@ -365,6 +365,7 @@ class HierarchicalGO2Env:
         cost_collision_terminal = float(getattr(cfg, "cost_collision_terminal", 0.0))
         cost_near_weight = float(getattr(cfg, "cost_near_weight", 1.0))
         collision_penalty = float(getattr(cfg, "collision_penalty", 0.0))
+        reward_near_penalty_scale = float(getattr(cfg, "reward_near_penalty_scale", 0.0))
 
         body_vel_xy = self.high_level_env.extract_body_vel_xy(high_level_obs)
         body_speed = torch.norm(body_vel_xy, dim=1)
@@ -398,6 +399,8 @@ class HierarchicalGO2Env:
         reward = torch.where(success, reward + success_reward, reward)
         if collision_penalty > 0.0:
             reward = reward - collision_penalty * collision.float()
+        if reward_near_penalty_scale > 0.0:
+            reward = reward - reward_near_penalty_scale * cost_near
 
         reward_scale = float(getattr(cfg, "reward_scale", 1.0))
         reward = reward * reward_scale
