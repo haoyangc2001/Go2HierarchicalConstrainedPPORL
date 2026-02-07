@@ -113,19 +113,19 @@ With `GO2HighLevelCfg.action_scale = [1.0, 1.0, 1.2]`, effective ranges:
 ### Reward/Cost Defaults (GO2HighLevelCfg.reward_shaping)
 - `goal_reached_dist = 0.3`
 - `collision_dist = 0.35`
-- `progress_scale = 12.0`
+- `progress_scale = 20.0`
 - `action_smooth_scale = 0.03`
-- `success_reward = 100.0`
-- `reward_near_penalty_scale = 3.0`
+- `success_reward = 150.0`
+- `reward_near_penalty_scale = 0.8`
 - `reward_scale = 1.0`
 - `reward_clip = 200.0`
 - `terminate_on_safety_violation = True`
 - `terminate_on_success = True`
 - `cost_safe_dist = 1.2`
-- `cost_collision_weight = 20.0`
-- `cost_collision_terminal = 75.0`
+- `cost_collision_weight = 25.0`
+- `cost_collision_terminal = 150.0`
 - `cost_near_weight = 0.3`
-- `collision_penalty = 180.0`
+- `collision_penalty = 150.0`
 
 ## CPPO Training (High Level)
 - 训练脚本：`legged_gym_go2/legged_gym/scripts/train_cppo.py`
@@ -140,15 +140,15 @@ With `GO2HighLevelCfg.action_scale = [1.0, 1.0, 1.2]`, effective ranges:
 
 ### CPPO Defaults (GO2HighLevelCfgPPO.algorithm)
 - `entropy_coef = 0.008`
-- `learning_rate = 2e-4`
+- `learning_rate = 1e-4`
 - `clip_param = 0.15`
 - `value_clip_param = 0.15`
-- `schedule = 'adaptive'`, `desired_kl = 0.04`
+- `schedule = 'adaptive'`, `desired_kl = 0.03`
 - `min_lr = 5e-6`, `max_lr = 3e-4`
-- `num_learning_epochs = 3`, `num_mini_batches = 12`
+- `num_learning_epochs = 2`, `num_mini_batches = 12`
 - `num_steps_per_env = 200`
 - `max_grad_norm = 0.5`
-- `cost_limit = 90.0`
+- `cost_limit = 230.0`
 - `lambda_init = 0.0`, `lambda_lr = 0.01`, `lambda_max = 100.0`
 - `normalize_advantage = True`
 
@@ -245,7 +245,8 @@ With `GO2HighLevelCfg.action_scale = [1.0, 1.0, 1.2]`, effective ranges:
   - 约束失效：`cost << cost_limit` 且 `lambda≈0`，CPPO 退化为 PPO。
   - 数值不稳：`grad_norm` 爆炸/`inf`、`nan_loss/nan_grad` 非零、`value_loss` 激增。
   - 策略漂移：`approx_kl`/`clip_frac` 长期偏高，`lr` 过早降到 `min_lr`。
-  - 进展停滞：`goal_dist` 不降、`progress` 低，成功率停滞。
+- 进展停滞：`goal_dist` 不降、`progress` 低，成功率停滞。
+- 若出现 `nan_loss/nan_grad`：必须结合首个 NaN dump 文件（`nan_dump_iterXXXXX_{loss|grad}.pt`）分析首个非有限张量来源。
 
 输出要求：形成结构化分析报告，至少包含：
 - 关键区间统计（起始/峰值/末尾，或分段均值）

@@ -309,3 +309,197 @@
 2) 结合新增日志确认 `cost_collision_terminal` 量级是否有效（不再接近 0）；若仍偏低且 collision 仍高，继续上调 `cost_collision_terminal`（如 100–120）或 `collision_penalty`。
 3) 若 `lambda` 仍接近饱和：适度下调 `cost_near_weight`（如 0.2）或再上调 `cost_limit`（如 140）。
 4) 若 `approx_kl/clip_frac` 仍偏高：增大 `num_mini_batches`（如 16）或固定较低 lr（如 1e-4）以减小单次更新步长。
+
+
+
+# 2026-01-25 训练日志分析与改动记录（20260124-204829）
+
+## 一、日志结论（是否收敛/异常）
+- 未收敛：success 中期上升到峰值后回落，峰值 iter 453 达 0.664，末尾 100 iter 均值≈0.219。
+- 碰撞主导终止：末尾 100 iter collision≈0.781，timeout=0；障碍碰撞占比高于边界（obstacle≈0.538 > boundary≈0.243）。
+- 约束失效：cost 均值多在 70–101，低于 cost_limit=130，lambda 在中后期长期为 0，CPPO 退化为 PPO。
+- 数值不稳定并触发冻结：iter 500–873 出现高 approx_kl/clip_frac 与极端 grad_norm；iter 873/874 开始 nan_loss/nan_grad，updates 归零，训练进入冻结态。
+- reward 结构偏惩罚：reward 正向项占比持续 <30%，末尾仅 ≈11%，负向项（碰撞/近障）占比 ≈89%。
+
+## 二、原因分析
+- 约束上限过高导致拉格朗日乘子长期为 0，成本约束无法抑制碰撞策略，训练退化为 PPO。
+- 更新不稳定（高 KL/clip + 梯度爆炸）导致非有限值出现，更新被跳过，模型冻结在次优解，success 回落且无法恢复。
+- reward 侧惩罚主导：进展/到达的正向驱动不足，碰撞/近障惩罚占据主要比例，容易形成“减负捷径”的局部最优。
+
+## 三、本次代码变更（奖励结构调整 + 稳定性诊断）
+1) 增强正向驱动、降低惩罚尺度
+   - 文件：`legged_gym_go2/legged_gym/envs/go2/go2_config.py`
+   - 修改：
+     - `progress_scale` 12.0 → 20.0
+     - `success_reward` 100.0 → 150.0
+     - `reward_near_penalty_scale` 1.5 → 0.8
+     - `collision_penalty` 180.0 → 150.0
+
+2) 强化碰撞终止成本（cost 侧）
+   - 文件：`legged_gym_go2/legged_gym/envs/go2/go2_config.py`
+   - 修改：`cost_collision_terminal` 75.0 → 150.0
+
+3) 轻量诊断钩子（定位 NaN 来源）
+   - 文件：`rsl_rl/rsl_rl/algorithms/cppo.py`
+   - 新增统计：`adv_std`、`adv_finite`、`logp_finite`、`ratio_finite`
+   - 文件：`legged_gym_go2/legged_gym/scripts/train_cppo.py`
+   - 训练日志输出上述指标
+
+## 四、下一步建议（按顺序）
+1) 重新训练 200–300 iter，观察新增诊断字段：
+   - `adv_finite/logp_finite/ratio_finite` 是否接近 1.0；`adv_std` 是否稳定非零；
+   - 若 `logp_finite/ratio_finite` 降低 → 优先排查观测/动作 NaN 进入网络；
+   - 若 `adv_finite` 降低但 logp 正常 → 优先排查 advantage/return 归一化或奖励尺度异常。
+2) 监控 reward 正/负占比是否回升到 40–50% 区间；若仍 <30%，继续提升 `progress_scale`（如 24）或 `success_reward`（如 180），并适度下调 `reward_near_penalty_scale`（如 0.6）。
+3) 若碰撞率仍 >0.6 且 lambda 仍接近 0：考虑将 `cost_limit` 下调至 100–110，让约束重新介入；同时保留 `cost_collision_terminal=150`。
+4) 若 `approx_kl/clip_frac` 仍偏高：固定较低 lr（如 1e-4）或增加 `num_mini_batches` 以降低单次更新幅度。
+
+
+
+# 2026-01-26 训练日志分析与改动记录（20260125-104530）
+
+## 一、日志结论（是否收敛/异常）
+- 未收敛：best100 success≈0.304（iter 317–416），best50≈0.319（iter 343–392），末尾 100 iter success 均值≈0.0217，滑动均值后期几乎无波动。
+- 碰撞主导终止：末尾 100 iter collision≈0.976，timeout=0，障碍碰撞占比高于边界（obstacle≈0.586 > boundary≈0.377）。
+- 约束长期饱和：cost≈229.9 显著高于 cost_limit=130，lambda≥99 的迭代比例≈96.2%，中后期几乎长期顶满。
+- 更新不稳定但未 NaN：grad_norm 末尾均值≈5.45e3（峰值≈1.89e4），clip_frac≈0.30，value_clip_frac≈0.96；nan_loss/nan_grad=0。
+- 探索/行为塌缩：cmd_speed≈0.01、action_std≈0.098、entropy≈-7.33，goal_dist≈4.36、progress≈0.005，进展停滞。
+
+## 二、原因分析
+- 约束过紧导致长期饱和：cost_limit=130 小于碰撞终止成本 cost_collision_terminal=150，且 collision≈0.97，使得成本几乎不可能满足，lambda 很快顶满。
+- 成本结构对碰撞区分度不足：cost_collision per-step 量级极小（≈0.001），cost_near 累计主导，策略更倾向“尽快结束回合”以降低累计成本。
+- 更新与探索衰减：高 grad_norm + clip_frac 偏高导致策略保守（cmd_speed≈0.01），但碰撞率未改善。
+
+## 三、本次代码变更（放宽约束 + 固定学习率）
+1) 放宽 cost 预算，缓解 lambda 长期饱和
+   - 文件：`legged_gym_go2/legged_gym/envs/go2/go2_config.py`
+   - 修改：`cost_limit` 130.0 → 160.0
+
+2) 固定学习率，降低更新不稳定
+   - 文件：`legged_gym_go2/legged_gym/envs/go2/go2_config.py`
+   - 修改：`learning_rate` 2e-4 → 1e-4
+   - 修改：`schedule` adaptive → fixed（保证 lr 固定）
+
+## 四、下一步建议（按顺序）
+1) 重新训练 200–400 iter，观察 `lambda` 是否脱离长期顶满、`cost` 是否围绕 160 波动、`success` 是否稳定回升、`collision` 是否下降到 <0.7。
+2) 若 `lambda` 仍长期顶满：继续上调 `cost_limit`（如 180–200）或下调 `cost_near_weight`（如 0.2），观察 `cost_near` 与 `collision` 变化。
+3) 若 `grad_norm/clip_frac` 仍偏高：增大 `num_mini_batches`（如 16）或进一步降低 `learning_rate`（如 5e-5），验证 200 iter 内 `approx_kl < 0.03`、`grad_norm < 500`。
+4) 若碰撞仍占主导：降低前向上限或将 `high_level_action_repeat` 调为 4，观察 `collision` 是否下降、`goal_dist` 是否开始下降。
+
+
+
+# 2026-01-27 训练日志分析与改动记录（20260126-102812）
+
+## 一、日志结论（是否收敛/异常）
+- 未收敛：200-iter 滑动均值峰值约 `0.190`（iter ~863），后期回落至 `~0.019`（最后 300 iter 均值 `0.019±0.008`）。
+- 碰撞主导终止：后期 `collision` 均值 `~0.981`（最后 300 iter），`timeout=0`，几乎所有回合以碰撞终止。
+- 约束长期饱和：`cost` 后段均值 ~229，显著高于 `cost_limit=160`；`lambda` 在 iter ~178 达到 100 并长期顶满。
+- 更新与探索退化：`approx_kl` 后段均值 ~0.044（峰值 ~0.128），`grad_norm` 后段均值 ~4.1e3（峰值 ~1.5e4）；`action_std` 在 iter ~1114 < 0.05，`entropy` 转负并持续下降，策略塌缩。
+
+## 二、原因分析
+- 约束尺度失配：成本长期高于预算，`lambda` 过早饱和且无法推动 `cost` 回落，CPPO 长期处于强约束压力下的无效收敛状态。
+- 探索衰减过快：`action_std/entropy` 持续下降导致策略输出趋于低速/低变化，但碰撞率仍高，成功率持续走低。
+- 更新不稳：`approx_kl/clip_frac` 偏高 + `grad_norm` 放大，价值更新被频繁裁剪（`value_clip_frac` 高），进一步放大策略漂移与不稳定。
+
+## 三、本次代码变更（放宽预算 + 恢复自适应 KL）
+1) 放宽成本预算，避免 `lambda` 长期顶满
+   - 文件：`legged_gym_go2/legged_gym/envs/go2/go2_config.py`
+   - 修改：`cost_limit` 160.0 → 230.0
+
+2) 恢复自适应学习率
+   - 文件：`legged_gym_go2/legged_gym/envs/go2/go2_config.py`
+   - 修改：`schedule` fixed → adaptive
+   - 修改：`desired_kl` 0.04 → 0.03
+
+## 四、下一步建议（按顺序）
+1) 重新训练 200–400 iter，观察 `cost` 是否围绕 230 波动、`lambda` 是否回落到 10–60 区间、`success` 是否不再持续下降。
+2) 若 `approx_kl/clip_frac` 仍偏高：进一步降低 `learning_rate`（如 1e-4 → 5e-5）或增加 `num_mini_batches`，验证 200 iter 内 `approx_kl < 0.03`、`grad_norm` 明显下降。
+3) 若探索继续塌缩（`action_std < 0.05`）：适度提高 `entropy_coef` 或 `init_noise_std`，保持非零探索。
+
+
+
+# 2026-01-28 训练日志分析与改动记录（20260127-143011）
+
+## 一、日志结论（是否收敛/异常）
+- 未收敛且后期平台化：`success` 峰值 `0.532`（iter 166），末尾 200 iter 均值 `~0.277`，rolling mean 稳定但来源于更新停摆。
+- 碰撞主导终止：末尾 `collision≈0.723`、`timeout=0`、`ep_len_mean≈59.5`，边界违规为 0，主要是障碍碰撞。
+- 约束未生效：`cost_limit=230` 明显高于实际 `cost`（后期 ~145），`lambda` 基本全程为 0，CPPO 退化为 PPO。
+- 数值不稳导致“停摆”：`nan_grad` 从 iter 734 开始，`nan_loss` 从 iter 742 开始；iter 744 起 `updates=0`，随后 `approx_kl/clip_frac/value_loss/grad_norm/entropy` 变为 0。
+
+## 二、原因分析
+- 约束预算偏高：`cost` 长期低于 `cost_limit`，`lambda≈0`，安全约束无法介入，碰撞率难下降。
+- 数值问题触发无更新：loss 或梯度出现 NaN/Inf 后被保护逻辑跳过更新，训练继续 rollout 但参数冻结。
+- 行为偏快：后期 `cmd_speed≈0.486`、`body_speed≈0.432`，在障碍密集场景中碰撞概率更高。
+
+## 三、本次代码变更（NaN 自动 dump + 终止）
+1) 在非有限 loss/grad 时 dump batch 并直接抛异常
+   - 文件：`rsl_rl/rsl_rl/algorithms/cppo.py`
+   - 新增：`set_debug_dump_dir` / `set_debug_iter` / `set_debug_raise_on_nan`
+   - 新增：`nan_dump_iterXXXXX_{loss|grad}.pt` 保存（含关键张量与统计）
+
+2) 训练脚本写入当前 log 目录并启用自动 raise
+   - 文件：`legged_gym_go2/legged_gym/scripts/train_cppo.py`
+   - 新增：`alg.set_debug_dump_dir(log_dir)`、`alg.set_debug_raise_on_nan(True)`、`alg.set_debug_iter(iter)`
+
+## 四、下一步建议（按顺序）
+1) 重新训练 200–400 iter，捕获首个 NaN 触发的 dump 文件，定位是观测、returns、advantages 还是分布参数导致。
+2) 下调 `cost_limit`（建议 140–160 区间起步），验证 `lambda` 在前 50–100 iter 进入非零区间、`collision` 是否下降。
+3) 若碰撞仍高：适度降低 `action_scale[0]` 或将 `high_level_action_repeat` 调为 4，观察 `cmd_speed` 与 `collision` 变化。
+
+
+
+# 2026-01-29 训练日志分析与改动记录（20260128-210846）
+
+## 一、日志结论（是否收敛/异常）
+- 平台化未完全收敛：`success` 峰值 `0.532`（iter 166），末尾 100 iter 均值 `0.444`，波动区间 `0.381–0.48`。
+- 碰撞仍主导终止：末尾 `collision≈0.562`、`timeout=0`、`ep_len_mean≈65.7`；边界碰撞率上升（early 0.044 → late 0.099），障碍碰撞仍占主。
+- 约束未生效：`cost` 均值约 `120`，`cost_limit=230` 仅在 iter 3 超限，`lambda` 最大 `0.015` 后长期为 0，CPPO 退化为 PPO。
+- 数值不稳后期恶化：`clip_frac` 从 iter 508 起 >0.5，`approx_kl` 从 iter 603 起 >0.1，iter 733 出现 `grad_norm=8.5e7`、`policy_loss=5.22e5`。
+
+## 二、原因分析
+- 约束预算偏高：`cost_limit` 远高于实际 `cost`，`lambda≈0` 导致安全约束无法介入，碰撞率难下降。
+- 更新偏离累积：`clip_frac/approx_kl` 走高，`ratio` 极端放大导致 surrogate 爆炸，梯度范数溢出到 `inf`。
+- 行为偏快：`cmd_speed` 逐段上升（0.226 → 0.281 → 0.346），在障碍场景下提高碰撞概率并缩短回合。
+
+## 三、本次代码变更（ratio 一致性检查）
+1) 新增一次性 ratio/logp_diff dump，用于确认 `ratio == exp(logp_diff)` 是否成立，并定位 logp_diff 极端样本
+   - 文件：`rsl_rl/rsl_rl/algorithms/cppo.py`
+   - 新增：`self._ratio_check_dumped` 标记
+   - 新增：`logp_diff / ratio / ratio_check / ratio_check_diff / ratio_check_rel_diff` 的单次 dump
+   - 触发条件：`ratio_max > 1e6` 或 `logp_diff_max > 20` 或非有限值
+   - 输出：`nan_dump_iterXXXXX_ratio_check.pt`
+
+## 四、下一步建议（按顺序）
+1) 让约束介入：将 `cost_limit` 下调至 `110–120`，观察前 50–100 iter `lambda > 0`，并在 200–400 iter 内验证 `collision` 是否降到 <0.5。
+2) 稳定更新：`num_mini_batches` 12 → 16 或 `num_learning_epochs` 2 → 1，目标 200 iter 内 `approx_kl < 0.05`、`clip_frac < 0.4`、`grad_norm` 明显下降。
+3) 降低速度：适度下调 `action_scale[0]` 或将 `high_level_action_repeat` 调为 4，验证 `cmd_speed` 回落与碰撞率变化。
+4) 触发 ratio_check dump 后比对 `logp_diff` 与 `ratio`，若不一致，检查 `old_actions_log_prob` 存取与 shape/broadcast 对齐。
+
+
+
+# 2026-01-30 训练日志分析与改动记录（20260129-103921）
+
+## 一、日志结论（是否收敛/异常）
+- 平台化未完全收敛：`success` 峰值 `0.532`（iter 166），末尾 50 iter 均值 `~0.445`；`collision` 末尾均值 `~0.555`，`timeout=0`。
+- 约束未生效：`cost` 均值约 `116`，`cost_limit=230` 明显偏高，`lambda` 仅 iter 3 有 `0.015`，其余全程 `0`，CPPO 退化为 PPO。
+- 更新稳定性恶化：`clip_frac` 后期 ~0.5，`approx_kl` 在 iter 603/733 出现 >0.1；iter 733 `policy_loss` 和 `grad_norm` 极端增大。
+- 数值 dump 定位：`nan_dump_iter00733_ratio_check.pt` 显示 `logp_diff_max≈21.66`、`ratio_max≈2.56e9`；`nan_dump_iter00734_grad.pt` 显示 `ratio_max≈6.87e21`、`surrogate_loss≈3.22e17`、`grad_norm=inf`。
+
+## 二、原因分析
+- 约束尺度失配：`cost_limit` 远高于实际 `cost`，导致 `lambda≈0`，安全约束无法介入，碰撞率难下降。
+- 极端 logp_diff 的根因（tanh-squash + 动作饱和放大 log_prob 差异）：
+  - 高层动作在训练后期接近饱和（dump 中 `actions_batch` max=1.0, min=-0.996），tanh-squash 需要 `atanh(actions)` 计算 raw 动作，`|a|→1` 时 `atanh(a)` 会快速变大。
+  - 高斯 log_prob 对 `(u-μ)^2/σ^2` 敏感，`u=atanh(a)` 变大后，即便 `μ` 轻微漂移也会造成 `logp_diff` 快速增大（>20），从而将 `ratio=exp(logp_diff)` 推到 `1e9–1e21`。
+  - `ratio_check_diff/rel_diff=0` 且 `finite_ratio=1` 说明公式计算完全一致且无 NaN/Inf，问题在于样本自身的 `logp_diff` 极端。
+- 更新偏离累积：`approx_kl/clip_frac` 走高，`ratio` 极端放大导致 surrogate 爆炸，`grad_norm` 溢出，训练后期不稳定。
+
+## 三、本次代码变更（动作分布对齐）
+1) 去掉 tanh-squash，改为与 Go2HierarchicalReachAvoidRL 一致的纯高斯分布
+   - 文件：`legged_gym_go2/legged_gym/scripts/train_cppo.py`
+   - 修改：移除 `ActorCriticCPPO(..., action_squash="tanh")`
+
+## 四、下一步建议（按顺序）
+1) 重新训练 200–400 iter，对比 `logp_diff_max/ratio_max/grad_norm/approx_kl` 是否明显下降，验证动作分布改动对数值稳定性的效果。
+2) 下调 `cost_limit`（建议 110–130 区间），确保前 50–100 iter `lambda > 0`，并观察 `collision` 是否下降。
+3) 若仍出现极端 ratio：增加保护（例如 `logp_diff` clamp 或 `ratio_max` 触发跳过 batch），并输出 top-k `logp_diff` 样本定位源头。
+4) 若碰撞仍高：适度降低 `action_scale[0]` 或将 `high_level_action_repeat` 调为 4，验证 `cmd_speed` 回落与碰撞变化。

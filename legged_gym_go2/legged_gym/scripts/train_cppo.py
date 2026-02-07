@@ -44,7 +44,6 @@ def train_reward_shaping(args) -> None:
         critic_hidden_dims=train_cfg.policy.critic_hidden_dims,
         activation=train_cfg.policy.activation,
         init_noise_std=train_cfg.policy.init_noise_std,
-        action_squash="tanh",
     ).to(device)
 
     algo_cfg = class_to_dict(train_cfg.algorithm)
@@ -126,6 +125,8 @@ def train_reward_shaping(args) -> None:
     log_file = os.path.join(log_dir, "training.log")
     log_fp = open(log_file, "a", encoding="utf-8")
     print(f"training log file: {log_file}")
+    alg.set_debug_dump_dir(log_dir)
+    alg.set_debug_raise_on_nan(True)
 
     reward_cfg = env_cfg.reward_shaping
 
@@ -308,6 +309,7 @@ def train_reward_shaping(args) -> None:
         c_std = cost_returns.std().item()
         cadv_mean = cost_advantages_raw.mean().item()
         cadv_std = cost_advantages_raw.std().item()
+        alg.set_debug_iter(iteration + 1)
         value_loss, policy_loss, approx_kl, clip_fraction = alg.update()
         update_stats = getattr(alg, "last_stats", {})
 
@@ -379,6 +381,10 @@ def train_reward_shaping(args) -> None:
             nonfinite_loss_batches = int(update_stats.get("nonfinite_loss_batches", 0))
             nonfinite_grad_batches = int(update_stats.get("nonfinite_grad_batches", 0))
             performed_updates = int(update_stats.get("performed_updates", 0))
+            adv_std = float(update_stats.get("adv_std", 0.0))
+            adv_finite = float(update_stats.get("adv_finite", 0.0))
+            logp_finite = float(update_stats.get("logp_finite", 0.0))
+            ratio_finite = float(update_stats.get("ratio_finite", 0.0))
             cost_limit = float(getattr(train_cfg.algorithm, "cost_limit", 0.0))
             log_line = (
                 f"iter {iteration + 1:05d} | success {success_rate:.3f} | reach {reach_rate:.3f} | "
@@ -399,6 +405,8 @@ def train_reward_shaping(args) -> None:
                 f"entropy {entropy:.5f} | lr {lr:.6f} | grad_norm {grad_norm:.3f} | "
                 f"nan_loss {nonfinite_loss_batches:d} | nan_grad {nonfinite_grad_batches:d} | "
                 f"updates {performed_updates:d} | value_clip_frac {value_clip_frac:.3f} | "
+                f"adv_std {adv_std:.3f} | adv_finite {adv_finite:.3f} | "
+                f"logp_finite {logp_finite:.3f} | ratio_finite {ratio_finite:.3f} | "
                 f"reward_clip {avg_reward_clip:.3f} | "
                 f"hazard_p10 {avg_hazard_p10:.3f} | hazard_p50 {avg_hazard_p50:.3f} | hazard_p90 {avg_hazard_p90:.3f} | "
                 f"boundary_violation {avg_boundary_violation:.3f} | "

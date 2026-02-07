@@ -200,10 +200,10 @@ class GO2HighLevelCfg(GO2RoughCfg):
         # Reward design for CPPO high-level navigation.
         goal_reached_dist = 0.3
         collision_dist = 0.35
-        progress_scale = 12.0
+        progress_scale = 20.0
         action_smooth_scale = 0.03
-        success_reward = 100.0
-        reward_near_penalty_scale = 1.5
+        success_reward = 150.0
+        reward_near_penalty_scale = 0.8
         reward_scale = 1.0
         reward_clip = 200.0
         terminate_on_safety_violation = True
@@ -212,9 +212,9 @@ class GO2HighLevelCfg(GO2RoughCfg):
         # Cost design (CMDP constraint).
         cost_safe_dist = 1.2
         cost_collision_weight = 25.0
-        cost_collision_terminal = 75.0
+        cost_collision_terminal = 150.0
         cost_near_weight = 0.3
-        collision_penalty = 180.0
+        collision_penalty = 150.0
 
     class env(GO2RoughCfg.env):
         num_observations = 7  # placeholder; overwritten below
@@ -230,20 +230,20 @@ class GO2HighLevelCfgPPO(LeggedRobotCfgPPO):
 
     class algorithm(LeggedRobotCfgPPO.algorithm):
         entropy_coef = 0.008
-        learning_rate = 2e-4
+        learning_rate = 1e-4
         clip_param = 0.15
         value_clip_param = 0.15
         value_loss_coef = 0.5
         cost_value_loss_coef = 0.5
         schedule = 'adaptive'
-        desired_kl = 0.04
+        desired_kl = 0.03
         min_lr = 5e-6
         max_lr = 3e-4
         num_learning_epochs = 2
         num_mini_batches = 12
         num_steps_per_env = 200 # increase horizon to give more time to reach the goal
         max_grad_norm = 0.5
-        cost_limit = 130.0
+        cost_limit = 230.0
         lambda_init = 0.0
         lambda_lr = 0.01
         lambda_max = 100.0
@@ -253,7 +253,7 @@ class GO2HighLevelCfgPPO(LeggedRobotCfgPPO):
         run_name = ''
         experiment_name = 'high_level_go2'
         max_iterations = 30000
-        save_interval = 200
+        save_interval = 1000
         # gh_dump_interval = 50  # iteration interval for dumping g/h tensors
         resume = False
         resume_path = "/home/caohy/repositories/MCRA_RL/logs/high_level_go2_CPPO/20260120-171158/model_200.pt"  # 你的checkpoint路径
