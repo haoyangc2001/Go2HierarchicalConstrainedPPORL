@@ -374,12 +374,11 @@ $$
 则 actor 的 clipped objective 为：
 
 $$
-L_{actor}(\theta)
-=
+L_{actor}(\theta) =
 \mathbb{E}\left[
 \min\left(
-\rho_t A_t^{lag},
-\text{clip}(\rho_t, 1-\epsilon, 1+\epsilon)A_t^{lag}
+\rho_t(\theta) A_t^{lag},
+\operatorname{clip}\left(\rho_t(\theta), 1-\epsilon, 1+\epsilon\right) A_t^{lag}
 \right)
 \right]
 $$
