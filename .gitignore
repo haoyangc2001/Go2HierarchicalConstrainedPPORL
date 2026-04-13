@@ -17,3 +17,7 @@ Thumbs.db
 /logs/high_level_go2_CPPO/
 
 .vscode/launch.json
+
+# Local-only docs
+/AGENTS.md
+/DEBUG_SUMMARY.md
